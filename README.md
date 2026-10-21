@@ -77,6 +77,34 @@ Rules that keep datasets honest:
 - Datasets are versioned by git, not by filename. `golden.jsonl` is the
   file; history is the log.
 
+## Usage
+
+Run the bundled sample dataset against the offline mock (no network, no keys):
+
+```
+python -m llm_evals.runner datasets/sample.jsonl
+```
+
+You get an aggregate table (accuracy overall, per scorer, per difficulty),
+plus per-case results under `results/sample/<timestamp>/` (`cases.jsonl`
+with every output/score/detail, `summary.json` with the aggregates).
+The exit code is 0 only at 1.000 accuracy — anything less is a signal,
+and day 5 turns that signal into the CI gate.
+
+Plug in a real model with `--model`:
+
+```
+python -m llm_evals.runner datasets/sample.jsonl --model myapp:ask_llm
+# SWAP: any "module:attr" path whose function takes case["input"]
+# (a string, or {"messages": [...]}) and returns the model's output text
+```
+
+Self-test (offline, no pytest needed):
+
+```
+python tests/run_tests.py
+```
+
 ## How the runner works (days 2–7)
 
 ```
