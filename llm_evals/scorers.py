@@ -1,7 +1,8 @@
-"""Deterministic scorers: exact / contains / regex / json_schema.
+"""Scorers: exact / contains / regex / json_schema / llm_judge.
 
 Every scorer returns (score, detail): score is 0.0 or 1.0 (no partial
-credit at this layer — partial credit is where evals start lying),
+credit at this layer — partial credit is where evals start lying; the
+judge's criterion breakdown lives in detail instead),
 detail is the human-readable reason, for the report table.
 """
 
@@ -122,20 +123,33 @@ def _json_schema(case, output):
     return 1.0, "valid JSON, schema ok"
 
 
+def _llm_judge(case, output):
+    # grades with the rubric prompt (judge.py). mock judge is the offline
+    # default; scorer_params.judge="gemini" swaps in the real model behind
+    # LLM_API_KEY. a judge that errors is a failed case, never a dead run.
+    from llm_evals.judge import Judge, gemini_judge_fn, mock_judge_fn
+
+    params = case.get("scorer_params") or {}
+    try:
+        judge_fn = gemini_judge_fn() if params.get("judge") == "gemini" else mock_judge_fn
+        judge = Judge(judge_fn=judge_fn, threshold=params.get("threshold", 0.8))
+        return judge.score(case["input"], case["expected"], output)
+    except Exception as e:  # noqa — a broken judge is a failed case, not a dead run
+        return 0.0, f"judge error: {type(e).__name__}: {str(e)[:120]}"
+
+
 _DISPATCH = {
     "exact": _exact,
     "contains": _contains,
     "regex": _regex,
     "json_schema": _json_schema,
+    "llm_judge": _llm_judge,
 }
 
 
 def score_case(case, output):
     """Score one model output against one case. Returns (score, detail)."""
-    scorer = case["scorer"]
-    if scorer == "llm_judge":
-        raise ValueError(f"case {case['id']}: llm_judge ships on day 3")
-    fn = _DISPATCH.get(scorer)
+    fn = _DISPATCH.get(case["scorer"])
     if fn is None:
-        raise ValueError(f"case {case['id']}: unknown scorer {scorer!r}")
+        raise ValueError(f"case {case['id']}: unknown scorer {case['scorer']!r}")
     return fn(case, output)

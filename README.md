@@ -105,6 +105,45 @@ Self-test (offline, no pytest needed):
 python tests/run_tests.py
 ```
 
+## LLM-as-judge (day 3)
+
+Deterministic scorers can't grade a good paraphrase. The `llm_judge`
+scorer grades with a rubric prompt instead:
+
+```
+{"id": "jq-1", "input": "...", "expected": "Paris", "scorer": "llm_judge",
+ "scorer_params": {"threshold": 0.8, "judge": "mock"}}
+```
+
+The prompt (`llm_evals/judge.py::render_prompt`) pins three criteria —
+correctness, completeness, clarity, each 1–5 — and demands a single JSON
+verdict `{"scores": {...}, "rationale": "..."}`. Verdicts that break the
+contract (no JSON, out-of-range scores, missing criteria) are failed
+cases, never silent passes. The criterion average is thresholded to
+1.0/0.0 for the runner; the breakdown lives in the result detail.
+
+Two judges ship. `mock` (default) is a deterministic stand-in that
+grades on keyword overlap — deliberately coarse, so it runs offline.
+`gemini` is the `# SWAP:` path: `scorer_params: {"judge": "gemini"}`
+calls a real model behind `LLM_API_KEY`/`LLM_MODEL`. No key, no network —
+it fails the case with a clear error instead of hanging.
+
+The honest question with any judge is "does it agree with a human?".
+`datasets/judge_agreement.jsonl` is a fixed 12-case labelled set
+(author labels, written from the spec — stand-ins for the harness
+plumbing; a real human study replaces the labels, not the code), and
+`python -m llm_evals.judge` measures the gap:
+
+```
+python -m llm_evals.judge datasets/judge_agreement.jsonl
+```
+
+Measured today against the mock judge: exact agreement 0.611,
+within-1 agreement **0.861**, mean absolute error 0.528, pass/fail
+decision agreement **0.917**. The miss is instructive, not a bug: the
+mock underrates paraphrase (agree-05) because it has no semantics —
+exactly the case for swapping in the real model when labels matter.
+
 ## How the runner works (days 2–7)
 
 ```
@@ -136,7 +175,7 @@ llm-evals/
   datasets/            golden JSONL datasets (the product)
   llm_evals/
     runner.py          day 2: dataset → model_fn → scored results
-    scorers.py         day 2: exact / contains / regex / json_schema
+    scorers.py         days 2-3: exact / contains / regex / json_schema / llm_judge
     judge.py           day 3: LLM-as-judge + agreement check
     rag_scorers.py     day 4: faithfulness / relevance / precision
     regression.py      day 5: snapshot diff + CI gate

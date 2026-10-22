@@ -15,6 +15,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from llm_evals.mock import mock_model_fn
 from llm_evals.runner import load_dataset, run_dataset, save_results
 from llm_evals.scorers import score_case
+from llm_evals.judge import (
+    Judge,
+    JudgeConfigError,
+    gemini_judge_fn,
+    load_agreement_dataset,
+    measure_agreement,
+    mock_judge_fn,
+    parse_verdict,
+    render_prompt,
+)
 
 FAILED = []
 
@@ -146,12 +156,166 @@ def test_broken_model_fn(tmp):
     check("crash detail kept", "model exploded" in r["detail"])
 
 
+def test_judge_prompt():
+    p = render_prompt("q?", "Paris", "Paris")
+    check(
+        "prompt names all criteria",
+        all(c in p for c in ("correctness", "completeness", "clarity")),
+    )
+    check(
+        "prompt carries reference+output",
+        "REFERENCE:" in p and "OUTPUT:" in p and p.count("Paris") >= 2,
+    )
+    check("prompt states json contract", '"scores"' in p and '"rationale"' in p)
+
+
+def test_parse_verdict():
+    v = parse_verdict(
+        '{"scores": {"correctness": 5, "completeness": 4, "clarity": 5}, "rationale": "ok"}'
+    )
+    check(
+        "parse clean json",
+        v["scores"]["completeness"] == 4 and v["rationale"] == "ok",
+    )
+    v = parse_verdict(
+        'Here is my verdict:\n'
+        '{"scores": {"correctness": 2, "completeness": 2, "clarity": 3}, "rationale": "meh"}\n'
+        "Done."
+    )
+    check("parse prose-wrapped json", v["scores"]["correctness"] == 2)
+    bad_cases = [
+        ("no json here", "rejects no-json"),
+        (
+            '{"scores": {"correctness": 6, "completeness": 5, "clarity": 5}, "rationale": "x"}',
+            "rejects out-of-range score",
+        ),
+        (
+            '{"scores": {"correctness": 5, "completeness": 5}, "rationale": "x"}',
+            "rejects missing criterion",
+        ),
+        (
+            '{"scores": {"correctness": 5, "completeness": 5, "clarity": 5, "vibes": 5}, "rationale": "x"}',
+            "rejects unknown criterion",
+        ),
+        (
+            '{"scores": {"correctness": 5, "completeness": 5, "clarity": 5}}',
+            "rejects missing rationale",
+        ),
+    ]
+    for bad, name in bad_cases:
+        try:
+            parse_verdict(bad)
+            check(name, False, "no ValueError raised")
+        except ValueError:
+            check(name, True)
+
+
+def test_mock_judge():
+    judge = Judge()
+    good, avg_good = judge.grade("capital?", "Paris", "Paris")
+    bad, avg_bad = judge.grade("capital?", "Paris", "Lyon")
+    check("mock orders good above bad", avg_good > avg_bad, f"{avg_good} vs {avg_bad}")
+    check(
+        "mock verdict shape",
+        set(good["scores"]) == {"correctness", "completeness", "clarity"}
+        and isinstance(good["rationale"], str),
+    )
+    s, detail = judge.score("capital?", "Paris", "Paris")
+    check("judge score passes good output", s == 1.0 and "pass" in detail, detail)
+    s, detail = judge.score("capital?", "Paris", "Lyon")
+    check("judge score fails wrong output", s == 0.0 and "fail" in detail, detail)
+
+
+def test_llm_judge_scorer():
+    c = {"id": "j-1", "input": "q", "expected": "Paris", "scorer": "llm_judge"}
+    check("llm_judge passes exact", score_case(c, "Paris")[0] == 1.0)
+    check("llm_judge fails wrong fact", score_case(c, "Lyon")[0] == 0.0)
+    check("llm_judge detail carries breakdown", "correctness" in score_case(c, "Paris")[1])
+    check(
+        "llm_judge threshold param",
+        score_case({**c, "scorer_params": {"threshold": 0.99}}, "Paris")[0] == 1.0,
+    )
+    # gemini selection without a key is a failed case, not a dead run
+    env = os.environ.pop("LLM_API_KEY", None)
+    try:
+        s, detail = score_case({**c, "scorer_params": {"judge": "gemini"}}, "Paris")
+        check("gemini judge without key fails case", s == 0.0 and "judge error" in detail, detail)
+    finally:
+        if env is not None:
+            os.environ["LLM_API_KEY"] = env
+
+
+def test_llm_judge_broken():
+    import llm_evals.judge as jmod
+
+    real = jmod.mock_judge_fn
+
+    def boom(prompt):
+        raise RuntimeError("judge exploded")
+
+    jmod.mock_judge_fn = boom
+    try:
+        c = {"id": "j-9", "input": "q", "expected": "Paris", "scorer": "llm_judge"}
+        s, detail = score_case(c, "Paris")
+        check("broken judge is failed case", s == 0.0 and "judge error" in detail, detail)
+    finally:
+        jmod.mock_judge_fn = real
+
+
+def test_gemini_judge_no_key():
+    # offline: must refuse clearly, never hang on the network
+    env = os.environ.pop("LLM_API_KEY", None)
+    try:
+        gemini_judge_fn()
+        check("gemini judge needs a key", False, "no JudgeConfigError")
+    except JudgeConfigError:
+        check("gemini judge needs a key", True)
+    finally:
+        if env is not None:
+            os.environ["LLM_API_KEY"] = env
+
+
+def test_agreement(tmp):
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(root, "datasets", "judge_agreement.jsonl")
+    rows, summary = measure_agreement(path)
+    check("agreement loads 12 cases", summary["cases"] == 12, str(summary["cases"]))
+    check("agreement rows have judge+human", all("judge" in r and "human" in r for r in rows))
+    check(
+        "mock within-1 agreement sane",
+        summary["within1_agreement"] >= 0.8,
+        str(summary["within1_agreement"]),
+    )
+    check("mock mae sane", summary["mae"] <= 0.6, str(summary["mae"]))
+    check(
+        "mock decision agreement sane",
+        summary["decision_agreement"] >= 0.85,
+        str(summary["decision_agreement"]),
+    )
+
+    bad = os.path.join(tmp, "agree-bad.jsonl")
+    with open(bad, "w") as f:
+        f.write('{"id": "x-1", "input": "q", "expected": "y", "output": "z"}\n')
+    try:
+        load_agreement_dataset(bad)
+        check("agreement loader needs human labels", False, "no ValueError")
+    except ValueError:
+        check("agreement loader needs human labels", True)
+
+
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         test_scorers()
         test_loader(tmp)
         test_runner_end_to_end(tmp)
         test_broken_model_fn(tmp)
+        test_judge_prompt()
+        test_parse_verdict()
+        test_mock_judge()
+        test_llm_judge_scorer()
+        test_llm_judge_broken()
+        test_gemini_judge_no_key()
+        test_agreement(tmp)
     print()
     if FAILED:
         print(f"{len(FAILED)} FAILED: {FAILED}")
