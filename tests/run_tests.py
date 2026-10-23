@@ -1,4 +1,4 @@
-"""Offline self-test for the day-2 runner + scorers.
+"""Offline self-test for the harness (runner + scorers + judge + RAG scorers).
 
 Plain asserts, no pytest, no network. Run from the repo root:
     python tests/run_tests.py
@@ -12,7 +12,8 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from llm_evals.mock import mock_model_fn
+from llm_evals.mock import mock_model_fn, mock_rag_model_fn
+from llm_evals.rag_scorers import _is_abstention, split_claims
 from llm_evals.runner import load_dataset, run_dataset, save_results
 from llm_evals.scorers import score_case
 from llm_evals.judge import (
@@ -303,6 +304,153 @@ def test_agreement(tmp):
         check("agreement loader needs human labels", True)
 
 
+def test_rag_claims():
+    claims = split_claims("Our window is 30 days [1]. Refunds go back to the card.")
+    check(
+        "claims split + citations stripped",
+        claims == ["Our window is 30 days", "Refunds go back to the card"],
+        str(claims),
+    )
+    check("short fragments dropped", split_claims("Yes. No.") == [])
+    check("abstention phrases recognised",
+          _is_abstention("I don't know") and not _is_abstention("Our window is 30 days"))
+
+
+RAG_CTX = ["Our refund window is 30 days from purchase. Refunds go back to the original payment method."]
+RAG_Q = "What is the refund window?"
+RAG_REF = "30 days from purchase, back to the original payment method."
+
+
+def rag_case(scorer, question, context, cid="r-1", expected=RAG_REF, params=None, fixed=None):
+    c = {"id": cid, "input": {"question": question, "context": context},
+         "expected": expected, "scorer": scorer}
+    if params:
+        c["scorer_params"] = params
+    if fixed is not None:
+        c["fixed_output"] = fixed
+    return c
+
+
+def test_rag_faithfulness():
+    c = rag_case("rag_faithfulness", RAG_Q, RAG_CTX)
+    s, d = score_case(c, "Our refund window is 30 days from purchase.")
+    check("faithfulness grounded passes", s == 1.0, d)
+    c = rag_case("rag_faithfulness", RAG_Q, RAG_CTX, cid="r-2")
+    s, d = score_case(
+        c, "Our refund window is 30 days from purchase. The company was founded in 1998 by two friends.")
+    check("faithfulness invented claim fails", s == 0.0 and "0.50" in d, d)
+    c = rag_case("rag_faithfulness", RAG_Q, RAG_CTX, cid="r-3")
+    s, d = score_case(c, "I don't know.")
+    check("faithfulness abstention passes", s == 1.0, d)
+    c = rag_case("rag_faithfulness", RAG_Q, RAG_CTX, cid="r-4")
+    s, d = score_case(c, "Yes.")
+    check("faithfulness vacuous answer passes", s == 1.0 and "no checkable claims" in d, d)
+    c = rag_case("rag_faithfulness", RAG_Q, RAG_CTX, cid="r-5", params={"threshold": 0.4})
+    s, d = score_case(
+        c, "Our refund window is 30 days from purchase. The company was founded in 1998 by two friends.")
+    check("faithfulness threshold override", s == 1.0, d)
+    env = os.environ.pop("LLM_API_KEY", None)
+    try:
+        c = rag_case("rag_faithfulness", RAG_Q, RAG_CTX, cid="r-6", params={"judge": "gemini"})
+        s, d = score_case(c, "Our refund window is 30 days from purchase.")
+        check("gemini claim check without key fails case", s == 0.0 and "judge error" in d, d)
+    finally:
+        if env is not None:
+            os.environ["LLM_API_KEY"] = env
+
+
+def test_rag_answer_relevance():
+    c = rag_case("rag_answer_relevance", RAG_Q, RAG_CTX)
+    s, d = score_case(c, "Our refund window is 30 days from purchase.")
+    check("relevance on-topic passes", s == 1.0, d)
+    c = rag_case("rag_answer_relevance", RAG_Q, RAG_CTX, cid="r-7")
+    s, d = score_case(c, "Loyalty points expire 12 months after they are earned.")
+    check("relevance off-topic fails", s == 0.0 and "token F1 0.00" in d, d)
+    c = rag_case("rag_answer_relevance", RAG_Q, RAG_CTX, cid="r-8")
+    s, d = score_case(c, "")
+    check("relevance empty answer fails", s == 0.0, d)
+
+
+def test_rag_context_precision():
+    ctx2 = RAG_CTX + ["Refunds are issued to the original payment method within 30 days of purchase.",
+                      "Loyalty points expire 12 months after they are earned."]
+    c = rag_case("rag_context_precision", RAG_Q, ctx2, cid="r-9")
+    s, d = score_case(c, "anything")
+    check("precision 2/3 passes", s == 1.0 and "2/3" in d, d)
+    ctx5 = RAG_CTX + [
+        "Loyalty points expire 12 months after they are earned.",
+        "Our stores are open from 9am to 9pm every day.",
+        "We ship to more than 40 countries worldwide.",
+        "Password resets are sent to your email within minutes.",
+    ]
+    c = rag_case("rag_context_precision", RAG_Q, ctx5, cid="r-10")
+    s, d = score_case(c, "anything")
+    check("precision 1/5 fails", s == 0.0 and "1/5" in d, d)
+    c = rag_case("rag_context_precision", RAG_Q, [], cid="r-11")
+    s, d = score_case(c, "anything")
+    check("precision no chunks fails", s == 0.0 and "no chunks" in d, d)
+
+
+def test_rag_input_validation():
+    try:
+        score_case(case("rag_faithfulness", "y"), "out")
+        check("rag scorer rejects string input", False, "no ValueError")
+    except ValueError:
+        check("rag scorer rejects string input", True)
+    c = {"id": "r-12", "input": {"question": "q", "context": "notalist"},
+         "expected": "x", "scorer": "rag_faithfulness"}
+    try:
+        score_case(c, "out")
+        check("rag scorer rejects non-list context", False, "no ValueError")
+    except ValueError:
+        check("rag scorer rejects non-list context", True)
+
+
+def test_mock_rag_model():
+    inp = {"question": RAG_Q,
+           "context": ["Loyalty points expire 12 months after they are earned.",
+                       "Our refund window is 30 days from purchase. Refunds go back to the original payment method."]}
+    out = mock_rag_model_fn(inp)
+    check("rag mock picks the refund chunk",
+          out == "Our refund window is 30 days from purchase.", out)
+    out = mock_rag_model_fn({"question": RAG_Q, "context": ["Loyalty points expire."]})
+    check("rag mock abstains with no overlap", out == "I don't know.", out)
+
+
+def test_fixed_output():
+    def boom(_):
+        raise RuntimeError("model exploded")
+
+    c = {"id": "f-1", "input": "x", "expected": "Paris", "scorer": "exact",
+         "fixed_output": "Paris"}
+    results, _ = run_dataset([c], boom)
+    r = results[0]
+    check("fixed_output bypasses model_fn",
+          r["score"] == 1.0 and r["fixed_output"] is True and r["error"] is None)
+    c = {"id": "f-2", "input": "x", "expected": "Paris", "scorer": "exact"}
+    results, _ = run_dataset([c], mock_model_fn)
+    check("fixed_output flag false by default", results[0]["fixed_output"] is False)
+
+
+def test_rag_sample_end_to_end():
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cases = load_dataset(os.path.join(root, "datasets", "rag_sample.jsonl"))
+    check("rag sample loads 7 cases", len(cases) == 7, f"got {len(cases)}")
+    results, summary = run_dataset(cases, mock_rag_model_fn)
+    check("all rag cases ran", len(results) == 7)
+    # the traps fail by design: hallucinated claim (002), off-topic answer (004),
+    # junk-heavy retrieval (006)
+    check(
+        "4 pass / 3 fail",
+        summary["passed"] == 4
+        and sorted(summary["failed_ids"]) == ["rag-002", "rag-004", "rag-006"],
+        str(summary["failed_ids"]),
+    )
+    check("rag accuracy 0.571", summary["accuracy"] == 0.571, str(summary["accuracy"]))
+    check("rag scorers in the table", set(summary["by_scorer"]) == {
+        "rag_faithfulness", "rag_answer_relevance", "rag_context_precision"})
+
+
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         test_scorers()
@@ -316,6 +464,14 @@ def main():
         test_llm_judge_broken()
         test_gemini_judge_no_key()
         test_agreement(tmp)
+        test_rag_claims()
+        test_rag_faithfulness()
+        test_rag_answer_relevance()
+        test_rag_context_precision()
+        test_rag_input_validation()
+        test_mock_rag_model()
+        test_fixed_output()
+        test_rag_sample_end_to_end()
     print()
     if FAILED:
         print(f"{len(FAILED)} FAILED: {FAILED}")

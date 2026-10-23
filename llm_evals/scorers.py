@@ -9,8 +9,19 @@ detail is the human-readable reason, for the report table.
 import json
 import re
 
+from llm_evals.rag_scorers import DISPATCH as _RAG_DISPATCH
+
 # unknown scorer names fail the dataset load, not the run
-KNOWN_SCORERS = ("exact", "contains", "regex", "json_schema", "llm_judge")
+KNOWN_SCORERS = (
+    "exact",
+    "contains",
+    "regex",
+    "json_schema",
+    "llm_judge",
+    "rag_faithfulness",
+    "rag_answer_relevance",
+    "rag_context_precision",
+)
 
 
 def _as_list(expected):
@@ -144,6 +155,7 @@ _DISPATCH = {
     "regex": _regex,
     "json_schema": _json_schema,
     "llm_judge": _llm_judge,
+    **_RAG_DISPATCH,
 }
 
 

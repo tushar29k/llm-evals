@@ -61,8 +61,8 @@ Field reference:
 | `id` | yes | Unique within the dataset, stable forever. Format `<dataset>-<nnn>`. Never reuse an id after deleting a case. |
 | `input` | yes | What goes to the model. A string for chat/prompt tasks, or `{"messages": [...]}` for multi-turn. |
 | `expected` | yes | The reference outcome. A string, a JSON object (for structured output), or a list of acceptable strings. |
-| `scorer` | yes | Which scorer grades this case: `exact`, `contains`, `regex`, `json_schema`, `llm_judge`. |
-| `scorer_params` | no | Scorer-specific knobs, e.g. `{"pattern": "..."}` for regex, `{"schema": {...}}` for json_schema, `{"rubric": "..."}` for llm_judge. |
+| `scorer` | yes | Which scorer grades this case: `exact`, `contains`, `regex`, `json_schema`, `llm_judge`, `rag_faithfulness`, `rag_answer_relevance`, `rag_context_precision`. |
+| `scorer_params` | no | Scorer-specific knobs, e.g. `{"pattern": "..."}` for regex, `{"schema": {...}}` for json_schema, `{"threshold": 0.8, "judge": "mock"}` for llm_judge and the rag scorers. |
 | `tags` | no | Free-form labels for slicing results (`faq`, `adversarial`, `regression-trap`). |
 | `difficulty` | no | `easy` / `medium` / `hard` — for weighting and for "did we break the easy stuff" checks. |
 | `notes` | no | Why this case exists. Future you will thank present you. |
@@ -143,6 +143,55 @@ within-1 agreement **0.861**, mean absolute error 0.528, pass/fail
 decision agreement **0.917**. The miss is instructive, not a bug: the
 mock underrates paraphrase (agree-05) because it has no semantics —
 exactly the case for swapping in the real model when labels matter.
+
+## RAG metrics (day 4)
+
+A RAG pipeline breaks in three places — generation, usefulness,
+retrieval — so the harness scores all three (`llm_evals/rag_scorers.py`).
+A RAG case carries the retrieved chunks in its input:
+
+```json
+{"id": "rag-001",
+ "input": {"question": "What is the refund window?",
+           "context": ["Our refund window is 30 days from purchase.", "..."]},
+ "expected": "30 days from purchase, back to the original payment method.",
+ "scorer": "rag_faithfulness"}
+```
+
+- `rag_faithfulness` — share of the answer's claims supported by the
+  retrieved context. Claims are split per sentence (citations stripped);
+  a claim is supported when most of its content tokens appear in the
+  context. An abstention ("I don't know") invents nothing and scores 1.0.
+- `rag_answer_relevance` — does the answer address the question?
+  Deterministic stand-in: F1 of content-token overlap between answer
+  and question. Crude, deterministic, honest about it.
+- `rag_context_precision` — share of retrieved chunks that are
+  on-point (share content tokens with the reference answer). The
+  retrieval diagnostic: low precision means the retriever brought junk.
+
+Like `llm_judge`, each metric is thresholded to 1.0/0.0 for the runner
+(defaults: faithfulness 0.8, relevance 0.5, precision 0.5, overrideable
+via `scorer_params.threshold`) with the metric value and breakdown in
+the result detail. The mock claim check is the offline default;
+`scorer_params: {"judge": "gemini"}` swaps claim-support verdicts to a
+real model behind `LLM_API_KEY` (fails the case clearly with no key).
+
+`datasets/rag_sample.jsonl` (7 cases) exercises all three against
+`mock_rag_model_fn`, a naive extractive RAG model (answers from the
+chunk with the most question-token overlap — grounded by construction).
+The traps are hand-written via the new `fixed_output` case field, which
+scores pre-recorded output without calling `model_fn` (also handy for
+scoring expensive real-model runs later): an invented founding year
+(faithfulness 0.50 → fail), an off-topic fluent answer (relevance 0.00
+→ fail), and a 1-in-5 junk-heavy retrieval (precision 0.20 → fail).
+Run it with:
+
+```
+python -m llm_evals.runner datasets/rag_sample.jsonl --model llm_evals.mock:mock_rag_model_fn
+```
+
+Measured today: 4/7 pass (the 3 traps fail by design), all 81 harness
+checks green offline.
 
 ## How the runner works (days 2–7)
 

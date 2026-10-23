@@ -51,3 +51,26 @@ def mock_model_fn(case_input):
         return years[0] if years else "2020"
 
     return "I don't have an answer for that."
+
+
+def mock_rag_model_fn(case_input):
+    """Naive extractive RAG model: answers from the retrieved chunk with the
+    most content-token overlap with the question (first sentence of it).
+    Grounded by construction — the happy path for the RAG scorers.
+    Trap cases in datasets/rag_sample.jsonl use fixed_output instead."""
+    from llm_evals.rag_scorers import _content_tokens
+
+    if not isinstance(case_input, dict):
+        return "I don't have an answer for that."
+    question = str(case_input.get("question", ""))
+    chunks = case_input.get("context") or []
+    q_toks = set(_content_tokens(question))
+    best, best_n = None, 0
+    for chunk in chunks:
+        n = len(q_toks & set(_content_tokens(chunk)))
+        if n > best_n:
+            best, best_n = chunk, n
+    if best is None:
+        return "I don't know."
+    first = re.split(r"[.!?]+", str(best).strip())[0].strip()
+    return first + "." if first else "I don't know."

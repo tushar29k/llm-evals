@@ -61,9 +61,12 @@ def run_case(case, model_fn):
         "scorer": case["scorer"],
         "tags": case.get("tags", []),
         "difficulty": case.get("difficulty", "medium"),
+        "fixed_output": case.get("fixed_output") is not None,
     }
     try:
-        output = model_fn(case["input"])
+        # fixed_output: pre-recorded model text (e.g. from a real-model run
+        # or a hand-written trap) — scored without calling model_fn
+        output = case["fixed_output"] if result["fixed_output"] else model_fn(case["input"])
         score, detail = score_case(case, output)
         result.update(output=output, score=score, detail=detail, error=None)
     except Exception as e:  # noqa — a broken model_fn is a failed case, not a dead run

@@ -4,4 +4,4 @@ golden datasets in, scored results out. deterministic scorers first,
 llm-as-judge second, regression snapshots in CI.
 """
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
