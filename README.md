@@ -193,6 +193,48 @@ python -m llm_evals.runner datasets/rag_sample.jsonl --model llm_evals.mock:mock
 Measured today: 4/7 pass (the 3 traps fail by design), all 81 harness
 checks green offline.
 
+## Regression mode (day 5)
+
+The runner already snapshots every run (`results/<dataset>/<timestamp>/`
+with `cases.jsonl` + `summary.json`). `llm_evals/regression.py` diffs a
+baseline against a candidate and reports what moved:
+
+```
+python -m llm_evals.regression results/sample/20261020-080000 results/sample/20261024-081500
+```
+
+```
+regression: 20261020-080000 -> 20261024-081500
+overall: 1.000 -> 0.900 (delta -0.100, threshold 0.0)
+  contains: 1.000 -> 0.800 (delta -0.200)
+newly failed (1): sample-006
+no regression        # or REGRESSION — exit code 1, the CI gate
+```
+
+- Exit code: 0 when clean, 1 on regression, 2 on a bad input dir.
+- `--threshold 0.02` tolerates small noise drops (default 0.0: any
+  drop fails — what you want for deterministic scorers).
+- Per-case lists: newly failed, fixed, output-changed-but-still-passing
+  (worth eyeballing), plus new/removed case ids — which are reported
+  but never count toward the verdict, since you can't regress on a
+  case that didn't exist before.
+- The report is also written as `regression.json` next to the
+  candidate's `summary.json`.
+
+Or gate in one command — run and compare against the checked-in
+baseline at once:
+
+```
+python -m llm_evals.runner datasets/sample.jsonl --compare-with results/sample/baseline
+```
+
+That exits 1 when the run regresses, so a GitHub Action needs one
+line. The runner's own exit code (1 when accuracy < 1.0) is unchanged.
+
+Measured today: baseline-vs-baseline diffs clean (delta 0.000, exit 0),
+an injected drop (3/4 → 2/4) reports `REGRESSION` with the failed case
+named and exits 1; 102 harness checks green offline.
+
 ## How the runner works (days 2–7)
 
 ```
@@ -209,8 +251,10 @@ datasets/*.jsonl ──▶ runner ──▶ model_fn(input) ──▶ scorers �
 - **Day 4** — RAG scorers: faithfulness (claim-level support),
   answer relevance, context precision — the three that actually
   diagnose retrieval vs generation failures.
-- **Day 5** — regression mode: compare two snapshots, fail (exit 1)
-  on any aggregate drop beyond tolerance. This is the CI gate.
+- **Day 5** — regression mode: diffs a candidate run against the baseline
+  snapshot and exits 1 on accuracy drops — the CI gate
+  (`llm_evals/regression.py`, or one-command via
+  `runner.py --compare-with <baseline>`).
 - **Day 6** — worked examples: the rag-service golden set and the
   agent-service task set wired in as example datasets, with their
   real mock `model_fn`s.

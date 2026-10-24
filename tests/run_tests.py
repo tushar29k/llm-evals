@@ -1,4 +1,5 @@
-"""Offline self-test for the harness (runner + scorers + judge + RAG scorers).
+"""Offline self-test for the harness (runner + scorers + judge + RAG scorers
++ regression mode).
 
 Plain asserts, no pytest, no network. Run from the repo root:
     python tests/run_tests.py
@@ -14,6 +15,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from llm_evals.mock import mock_model_fn, mock_rag_model_fn
 from llm_evals.rag_scorers import _is_abstention, split_claims
+from llm_evals.regression import compare_runs
+from llm_evals.regression import main as regression_main
 from llm_evals.runner import load_dataset, run_dataset, save_results
 from llm_evals.scorers import score_case
 from llm_evals.judge import (
@@ -451,6 +454,86 @@ def test_rag_sample_end_to_end():
         "rag_faithfulness", "rag_answer_relevance", "rag_context_precision"})
 
 
+def test_regression(tmp):
+    # fabricate two runs: 4 cases, baseline all pass, candidate drops one
+    def write_run(name, passes, extras=None):
+        d = os.path.join(tmp, name)
+        os.makedirs(d)
+        rows = []
+        for cid, ok in sorted(passes.items()):
+            rows.append({"id": cid, "input": "x", "expected": "y", "scorer": "exact",
+                         "output": "y" if ok else "nope", "score": 1.0 if ok else 0.0,
+                         "passed": ok, "detail": "", "error": None, "latency_s": 0.01})
+        for extra in (extras or []):
+            rows.append(extra)
+        with open(os.path.join(d, "cases.jsonl"), "w") as f:
+            for r in rows:
+                f.write(json.dumps(r) + "\n")
+        with open(os.path.join(d, "summary.json"), "w") as f:
+            json.dump({"total": len(rows)}, f)
+        return d
+
+    base = write_run("base", {"c1": True, "c2": True, "c3": False, "c4": True})
+    cand = write_run("cand", {"c1": True, "c2": False, "c3": False, "c4": True})
+
+    report = compare_runs(base, cand)
+    check("regression verdict on drop", report["regressed"] is True)
+    check("overall delta -0.25", report["overall"]["delta"] == -0.25, str(report["overall"]))
+    check("newly failed found", report["newly_failed"] == ["c2"], str(report["newly_failed"]))
+    check("nothing fixed", report["fixed"] == [])
+    check("compared 4", report["cases"]["compared_n"] == 4)
+
+    # identical runs: no regression
+    report2 = compare_runs(base, base)
+    check("identical runs: no regression", report2["regressed"] is False)
+    check("identical delta 0.0", report2["overall"]["delta"] == 0.0)
+
+    # fixed-only candidate: delta up, not a regression, c3 listed as fixed
+    fixed_run = write_run("fixed", {"c1": True, "c2": True, "c3": True, "c4": True})
+    report3 = compare_runs(base, fixed_run)
+    check("fixed case listed", report3["fixed"] == ["c3"])
+    check("improvement is not a regression", report3["regressed"] is False)
+    check("improvement delta +0.25", report3["overall"]["delta"] == 0.25)
+
+    # threshold: a small drop is tolerated when allowed
+    report4 = compare_runs(base, cand, threshold=0.3)
+    check("drop within threshold passes", report4["regressed"] is False)
+    try:
+        regression_main([base, cand, "--threshold", "-0.5"])
+        check("negative threshold rejected", False, "no SystemExit")
+    except SystemExit:
+        check("negative threshold rejected", True)
+
+    # new/removed case ids are reported but don't gate the verdict
+    cand2 = write_run("cand2", {"c1": True, "c2": True, "c3": True, "c4": True},
+                      extras=[{"id": "c5", "input": "x", "expected": "y", "scorer": "exact",
+                               "output": "nope", "score": 0.0, "passed": False,
+                               "detail": "", "error": None, "latency_s": 0.01}])
+    report5 = compare_runs(base, cand2)
+    check("new ids listed", report5["cases"]["new_ids"] == ["c5"])
+    # compared on the 4 common: c3 fixed, nothing newly failed -> no regression
+    check("new-case fail doesn't gate", report5["regressed"] is False)
+    check("scorer deltas present", report5["by_scorer"]["exact"]["delta"] is not None)
+
+    # changed output on a still-passing case is flagged
+    changed = write_run("changed", {"c1": True, "c2": True, "c3": True, "c4": True})
+    rows = [json.loads(l) for l in open(os.path.join(changed, "cases.jsonl"))]
+    rows[0]["output"] = "y, slightly reworded"
+    with open(os.path.join(changed, "cases.jsonl"), "w") as f:
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+    report6 = compare_runs(base, changed)
+    check("changed output flagged", report6["changed_output"] == ["c1"])
+    check("changed output isn't a regression", report6["regressed"] is False)
+
+    # CLI exit codes
+    check("cli exits 1 on regression", regression_main([base, cand]) == 1)
+    check("cli exits 0 clean", regression_main([base, base, "--no-save"]) == 0)
+    check("cli exits 2 on bad dir",
+          regression_main([os.path.join(tmp, "missing"), base, "--no-save"]) == 2)
+    check("regression.json saved", os.path.exists(os.path.join(cand, "regression.json")))
+
+
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         test_scorers()
@@ -472,6 +555,7 @@ def main():
         test_mock_rag_model()
         test_fixed_output()
         test_rag_sample_end_to_end()
+        test_regression(tmp)
     print()
     if FAILED:
         print(f"{len(FAILED)} FAILED: {FAILED}")

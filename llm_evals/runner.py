@@ -144,6 +144,10 @@ def main(argv=None):
     parser.add_argument("dataset", help="path to a datasets/*.jsonl file")
     parser.add_argument("--model", default="mock", help="'mock' or 'module:attr'")
     parser.add_argument("--out", default="results", help="results directory")
+    parser.add_argument("--compare-with", metavar="RUN_DIR", default=None,
+                        help="baseline run dir: compare this run against it, exit 1 on regression")
+    parser.add_argument("--threshold", type=float, default=0.0,
+                        help="allowed accuracy drop vs baseline (default 0.0 = any drop fails)")
     args = parser.parse_args(argv)
 
     cases = load_dataset(args.dataset)
@@ -154,6 +158,15 @@ def main(argv=None):
     dest = save_results(results, summary, dataset_name, args.out)
     print_table(summary, dataset_name)
     print(f"results: {dest}/")
+    if args.compare_with:
+        # CI gate: diff this run against the checked-in baseline
+        from llm_evals.regression import compare_runs, format_report, save_report
+
+        report = compare_runs(args.compare_with, dest, args.threshold)
+        save_report(report, dest)
+        print(format_report(report))
+        if report["regressed"]:
+            return 1
     return 0 if summary["accuracy"] == 1.0 else 1
 
 
