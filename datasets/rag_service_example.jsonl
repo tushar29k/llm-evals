@@ -1,0 +1,8 @@
+{"id": "ragsvc-001", "input": "What is the refund window?", "expected": "30 days", "scorer": "contains", "tags": ["refund-in"], "difficulty": "easy", "notes": "rag-service golden set: refund-in doc"}
+{"id": "ragsvc-002", "input": "How long is maternity leave in India?", "expected": "26 weeks", "scorer": "contains", "tags": ["leave-in"], "difficulty": "easy", "notes": "rag-service golden set: leave-in doc"}
+{"id": "ragsvc-003", "input": "What does the warranty cover?", "expected": "2 year", "scorer": "contains", "tags": ["warranty-in"], "difficulty": "easy", "notes": "rag-service golden set: warranty-in doc"}
+{"id": "ragsvc-004", "input": "How long does standard shipping take?", "expected": "3 to 5", "scorer": "contains", "tags": ["shipping-us"], "difficulty": "easy", "notes": "rag-service golden set: shipping-us doc"}
+{"id": "ragsvc-005", "input": "What discount do new customers get?", "expected": "10 percent", "scorer": "contains", "tags": ["pricing-in"], "difficulty": "easy", "notes": "rag-service golden set: pricing-in doc"}
+{"id": "ragsvc-006", "input": "What is the return policy for clearance items?", "expected": "final sale", "scorer": "contains", "tags": ["refund-in"], "difficulty": "easy", "notes": "rag-service golden set: clearance trap — final sale, not a refund"}
+{"id": "ragsvc-007", "input": "Who is the CEO?", "expected": "don't know", "scorer": "contains", "tags": ["unknown"], "difficulty": "easy", "notes": "rag-service golden set: abstention case — not in the seeded docs"}
+{"id": "ragsvc-008", "input": "How do I request a refund?", "expected": "support@example.com", "scorer": "contains", "tags": ["refund-in"], "difficulty": "easy", "notes": "rag-service golden set: refund-in doc"}

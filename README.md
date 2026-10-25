@@ -235,6 +235,42 @@ Measured today: baseline-vs-baseline diffs clean (delta 0.000, exit 0),
 an injected drop (3/4 → 2/4) reports `REGRESSION` with the failed case
 named and exits 1; 102 harness checks green offline.
 
+## Worked examples (day 6)
+
+The harness is only useful if it runs on a real project's evals, so
+day 6 wires in the two services it grew out of — as examples you can
+copy, not as dependencies:
+
+```sh
+python -m llm_evals.runner datasets/rag_service_example.jsonl --model llm_evals.examples:mock_rag_service_fn
+python -m llm_evals.runner datasets/agent_service_example.jsonl --model llm_evals.examples:mock_agent_service_fn
+```
+
+- `datasets/rag_service_example.jsonl` (8 cases) is a slice of
+  rag-service's `evals/golden.jsonl`: refund window, maternity leave,
+  warranty cover, US shipping, new-customer discount, the clearance
+  final-sale trap, and the CEO abstention case. The mock answers from
+  the same seeded policy facts the real service retrieves.
+- `datasets/agent_service_example.jsonl` (8 cases) is a slice of
+  agent-service's `evals/tasks.yaml`: refund lookup, warranty-months
+  conversion, Fibonacci and factorial (the tool-misuse trap), the
+  support-minutes multi-step, and the unknown-topic abstention. The
+  approval-gate and injection-refusal tasks can't be reproduced by a
+  single-turn mock, so they ship as `fixed_output` cases — the recorded
+  outcome is what's scored, exactly as day 4's trap cases work.
+- `llm_evals/examples.py` also converts the native files directly:
+  `translate_rag_golden(path)` turns golden.jsonl into cases, and
+  `translate_agent_tasks(tasks)` turns parsed tasks.yaml into cases —
+  except approval/refusal tasks, which it reports as skipped instead of
+  silently rewriting (a gate verdict lives in the audit log, not in
+  answer text). Swap the mocks for the real pipeline/agent calls and
+  the case format doesn't change (`# SWAP:` in `examples.py`).
+
+Measured today: rag example 8/8, agent example 8/8; the converters run
+against the real native files give 20 rag cases and 8 agent cases with
+4 gate/refusal tasks skipped by design. All 120 harness checks green
+offline.
+
 ## How the runner works (days 2–7)
 
 ```
@@ -255,9 +291,10 @@ datasets/*.jsonl ──▶ runner ──▶ model_fn(input) ──▶ scorers �
   snapshot and exits 1 on accuracy drops — the CI gate
   (`llm_evals/regression.py`, or one-command via
   `runner.py --compare-with <baseline>`).
-- **Day 6** — worked examples: the rag-service golden set and the
-  agent-service task set wired in as example datasets, with their
-  real mock `model_fn`s.
+- **Day 6** — worked examples: slices of the rag-service golden set
+  and the agent-service task set as example datasets, with keyword
+  mock `model_fn`s and converters for the native files
+  (`llm_evals/examples.py`).
 - **Day 7** — GitHub Action running the harness on push + release notes.
 
 ## Layout
@@ -272,6 +309,7 @@ llm-evals/
     judge.py           day 3: LLM-as-judge + agreement check
     rag_scorers.py     day 4: faithfulness / relevance / precision
     regression.py      day 5: snapshot diff + CI gate
+    examples.py        day 6: rag/agent example model_fns + native-file converters
   snapshots/           checked-in score snapshots (CI compares against these)
   .github/workflows/   day 7: evals on push
 ```
