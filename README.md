@@ -271,6 +271,41 @@ against the real native files give 20 rag cases and 8 agent cases with
 4 gate/refusal tasks skipped by design. All 120 harness checks green
 offline.
 
+## CI (day 7)
+
+`.github/workflows/evals.yml` runs on every push and PR to main — no
+network, no model keys, Python 3.12:
+
+- **Gated:** `python tests/run_tests.py` must pass, and both example
+  datasets must run 8/8 *and* not regress against the checked-in
+  baselines in `snapshots/<dataset>/` (`cases.jsonl` + `summary.json`,
+  generated with the paired mocks). A drop fails the build.
+- **Informational** (`continue-on-error`): the trap datasets
+  `sample.jsonl` (7/10) and `rag_sample.jsonl` (4/7) — their failing
+  cases are traps by design, so they can never gate, but the numbers
+  stay visible in the log. Same for the judge-agreement check
+  (`python -m llm_evals.judge datasets/judge_agreement.jsonl`).
+
+Refreshing a baseline (only when the dataset or the mock genuinely
+changed, never to hide a drop):
+
+```sh
+python -m llm_evals.runner datasets/rag_service_example.jsonl \
+  --model llm_evals.examples:mock_rag_service_fn --out /tmp/runs
+cp /tmp/runs/rag_service_example/<timestamp>/cases.jsonl \
+   /tmp/runs/rag_service_example/<timestamp>/summary.json \
+   snapshots/rag_service_example/
+```
+
+`tests/run_tests.py` covers the CI contract itself: the snapshots load,
+hold 8 passing cases each, and a fresh run diffs clean against them
+(`test_baselines`), and the workflow file still contains the gated
+steps (`test_workflow`).
+
+Measured today: 132 harness checks green offline; gated example runs
+exit 0 against the fresh snapshots; the workflow's four steps run
+clean locally in the same order CI runs them.
+
 ## How the runner works (days 2–7)
 
 ```
@@ -295,7 +330,9 @@ datasets/*.jsonl ──▶ runner ──▶ model_fn(input) ──▶ scorers �
   and the agent-service task set as example datasets, with keyword
   mock `model_fn`s and converters for the native files
   (`llm_evals/examples.py`).
-- **Day 7** — GitHub Action running the harness on push + release notes.
+- **Day 7** — GitHub Action running the harness on push + release notes
+  (`.github/workflows/evals.yml`, checked-in `snapshots/` baselines,
+  `RELEASES.md`).
 
 ## Layout
 
@@ -310,7 +347,7 @@ llm-evals/
     rag_scorers.py     day 4: faithfulness / relevance / precision
     regression.py      day 5: snapshot diff + CI gate
     examples.py        day 6: rag/agent example model_fns + native-file converters
-  snapshots/           checked-in score snapshots (CI compares against these)
+  snapshots/           checked-in baseline runs (CI compares against these)
   .github/workflows/   day 7: evals on push
 ```
 

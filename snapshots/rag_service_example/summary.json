@@ -1,0 +1,22 @@
+{
+  "total": 8,
+  "passed": 8,
+  "accuracy": 1.0,
+  "by_scorer": {
+    "contains": {
+      "n": 8,
+      "passed": 8,
+      "acc": 1.0
+    }
+  },
+  "by_difficulty": {
+    "easy": {
+      "n": 8,
+      "passed": 8,
+      "acc": 1.0
+    }
+  },
+  "failed_ids": [],
+  "dataset": "rag_service_example",
+  "run_at": "20261026-025557"
+}

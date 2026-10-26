@@ -9,6 +9,7 @@ results/
 snapshots/local-*.json
 *.jsonl
 !datasets/*.jsonl
+!snapshots/**/cases.jsonl
 
 # os / editor
 .DS_Store

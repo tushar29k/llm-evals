@@ -1,0 +1,27 @@
+{
+  "total": 8,
+  "passed": 8,
+  "accuracy": 1.0,
+  "by_scorer": {
+    "contains": {
+      "n": 8,
+      "passed": 8,
+      "acc": 1.0
+    }
+  },
+  "by_difficulty": {
+    "easy": {
+      "n": 6,
+      "passed": 6,
+      "acc": 1.0
+    },
+    "medium": {
+      "n": 2,
+      "passed": 2,
+      "acc": 1.0
+    }
+  },
+  "failed_ids": [],
+  "dataset": "agent_service_example",
+  "run_at": "20261026-025557"
+}

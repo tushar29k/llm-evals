@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from llm_evals.mock import mock_model_fn, mock_rag_model_fn
 from llm_evals.rag_scorers import _is_abstention, split_claims
-from llm_evals.regression import compare_runs
+from llm_evals.regression import compare_runs, load_run
 from llm_evals.regression import main as regression_main
 from llm_evals.runner import load_dataset, run_dataset, save_results
 from llm_evals.scorers import score_case
@@ -587,6 +587,42 @@ def test_example_datasets_end_to_end():
     check("agent example 8/8", agent_summary["accuracy"] == 1.0 and agent_summary["passed"] == 8, str(agent_summary["failed_ids"]))
 
 
+def test_baselines(tmp):
+    # checked-in snapshots must match a fresh run: the CI gate compares
+    # against these, so a stale snapshot would fail every build
+    from llm_evals.examples import mock_agent_service_fn, mock_rag_service_fn
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    for name, model_fn in (("rag_service_example", mock_rag_service_fn),
+                           ("agent_service_example", mock_agent_service_fn)):
+        base_dir = os.path.join(root, "snapshots", name)
+        base_cases, _ = load_run(base_dir)
+        check(f"{name} baseline has 8 cases", len(base_cases) == 8, str(len(base_cases)))
+        check(f"{name} baseline all pass",
+              all(c.get("passed") for c in base_cases.values()))
+        cases = load_dataset(os.path.join(root, "datasets", name + ".jsonl"))
+        results, summary = run_dataset(cases, model_fn)
+        dest = save_results(results, summary, name, tmp)
+        report = compare_runs(base_dir, dest)
+        check(f"{name} fresh run matches baseline", report["regressed"] is False,
+              str(report["overall"]))
+        check(f"{name} baseline delta 0.0", report["overall"]["delta"] == 0.0)
+
+
+def test_workflow():
+    # plain-text smoke check: the workflow file CI actually runs must
+    # still contain the gated steps (no yaml lib needed offline)
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    with open(os.path.join(root, ".github", "workflows", "evals.yml")) as f:
+        text = f.read()
+    check("workflow checks out code", "actions/checkout" in text)
+    check("workflow runs tests", "tests/run_tests.py" in text)
+    check("workflow gates on baselines",
+          "--compare-with snapshots/rag_service_example" in text
+          and "--compare-with snapshots/agent_service_example" in text)
+    check("workflow marks trap steps informational", "continue-on-error: true" in text)
+
+
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         test_scorers()
@@ -612,6 +648,8 @@ def main():
         test_examples_mocks()
         test_converters(tmp)
         test_example_datasets_end_to_end()
+        test_baselines(tmp)
+        test_workflow()
     print()
     if FAILED:
         print(f"{len(FAILED)} FAILED: {FAILED}")

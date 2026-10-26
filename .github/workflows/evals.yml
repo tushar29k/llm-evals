@@ -1,0 +1,50 @@
+name: evals
+
+# Every push and PR runs the harness end to end. No network, no model
+# keys: the mocks and the checked-in snapshots are all CI needs.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  evals:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Gated: the offline self-test must pass.
+      - name: Unit + integration tests
+        run: python tests/run_tests.py
+
+      # Gated: the worked examples must pass 8/8 AND not regress against
+      # the checked-in snapshots in snapshots/. A drop fails the build.
+      - name: Example evals with regression gate
+        run: |
+          python -m llm_evals.runner datasets/rag_service_example.jsonl \
+            --model llm_evals.examples:mock_rag_service_fn \
+            --compare-with snapshots/rag_service_example
+          python -m llm_evals.runner datasets/agent_service_example.jsonl \
+            --model llm_evals.examples:mock_agent_service_fn \
+            --compare-with snapshots/agent_service_example
+
+      # Informational only: sample.jsonl (7/10) and rag_sample.jsonl
+      # (4/7) contain trap cases that fail by design, so they can never
+      # gate. They still run so the numbers stay visible in the log.
+      - name: Trap datasets (informational, traps fail by design)
+        continue-on-error: true
+        run: |
+          python -m llm_evals.runner datasets/sample.jsonl
+          python -m llm_evals.runner datasets/rag_sample.jsonl \
+            --model llm_evals.mock:mock_rag_model_fn
+
+      # Informational: judge-vs-human agreement on the fixed label set.
+      - name: Judge agreement (informational)
+        continue-on-error: true
+        run: python -m llm_evals.judge datasets/judge_agreement.jsonl
