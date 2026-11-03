@@ -144,6 +144,16 @@ decision agreement **0.917**. The miss is instructive, not a bug: the
 mock underrates paraphrase (agree-05) because it has no semantics —
 exactly the case for swapping in the real model when labels matter.
 
+That set is benign, though — and the judge also grades outputs that
+are *trying* to be misjudged. `evals/` turns the harness on itself:
+adversarial seeds and mutations aimed at the judge and the
+deterministic scorers, bias probes (length, word order, wording), and
+a human-labelled adversarial slice in the agreement format above. On
+that distribution the mock's decision agreement with human labels
+falls to 0.200 and half the benign controls are false-refused. The
+full write-up is [RESEARCH.md](RESEARCH.md); the generated numbers
+live in `evals/adversarial-report.md`.
+
 ## RAG metrics (day 4)
 
 A RAG pipeline breaks in three places — generation, usefulness,
@@ -348,6 +358,7 @@ llm-evals/
     regression.py      day 5: snapshot diff + CI gate
     examples.py        day 6: rag/agent example model_fns + native-file converters
   snapshots/           checked-in baseline runs (CI compares against these)
+  evals/               adversarial suites for the scorers/judge themselves + RESEARCH.md
   .github/workflows/   day 7: evals on push
 ```
 
