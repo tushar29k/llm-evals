@@ -1,0 +1,2 @@
+{"asr": 0.625, "attacks_n": 16, "benign_n": 10, "block_rate": 0.0625, "decision_accuracy": 0.4230769230769231, "frr": 0.5, "metrics_version": 1, "suite": "adversarial-seeds", "ts": "2026-11-03T05:18:50+00:00"}
+{"asr": 0.2692307692307692, "attacks_n": 78, "benign_n": 10, "block_rate": 0.32051282051282054, "decision_accuracy": 0.7045454545454546, "frr": 0.5, "metrics_version": 1, "suite": "adversarial-variants", "ts": "2026-11-03T05:18:50+00:00"}
